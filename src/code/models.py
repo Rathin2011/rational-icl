@@ -88,6 +88,9 @@ def init_transformer(config):
     elif config.setting == "classification":
         model = ClassificationTransformer(config=config, model_config=model_config)
 
+    elif config.setting == "quadratic-regression":
+        model = LinearRegressionTransformer(config=config, model_config=model_config)
+
     logger.info(f"Initialized model of type: {config.model_type}")
     logger.info(f"Number of parameters: {model.num_parameters()}")
 

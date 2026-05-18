@@ -46,6 +46,7 @@ class Config:
             "categorical-sequence",
             "linear-regression",
             "classification",
+            "quadratic-regression",
         ]:
             raise ValueError(
                 "setting must be either 'categorical-sequence', 'linear-regression', or 'classification'"
@@ -220,6 +221,16 @@ class Config:
             }
             self.noisy_items = True
             self.within_class_variance = 0.5
+        elif setting == "quadratic-regression":
+            self.prior_params = [0, 1]  # stored for consistency; not used in sampling
+            self.block_size = 2 * self.context_length  # interleaved xs and ys
+            self.inputs_key = "xs"
+            self.labels_key = "labels"
+            self.metric_name = "MSE"
+            self.algo_names_dict = {
+                "memorized": "$M$",
+                "generalized": "$G$",
+            }
 
     def make_yaml_str(self):
         """Make a yaml string from the config."""

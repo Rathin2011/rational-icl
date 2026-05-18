@@ -56,6 +56,13 @@ def make_dataset(config, mode):
             num_dims=config.num_dims,
             num_labels=config.num_labels,
         )
+    elif setting == "quadratic-regression":
+        QuadraticRegressionDataset.make_dataset(
+            num_tasks=num_tasks,
+            data_path=data_path,
+            rng=rng,
+            num_dims=config.num_dims,
+        )
 
 
 def init_dataset(config, mode, dataset_length=None, iwl=False):
@@ -77,6 +84,8 @@ def init_dataset(config, mode, dataset_length=None, iwl=False):
             return ClassificationDataset(data_path, config, dataset_length=dataset_length, mode="iwl")
         else:
             return ClassificationDataset(data_path, config, dataset_length=dataset_length)
+    elif config.setting == "quadratic-regression":
+        return QuadraticRegressionDataset(data_path, config, dataset_length=dataset_length)
 
 #########################
 # general ICL dataset class
@@ -368,6 +377,72 @@ class LinearRegressionDataset(ICLDataset):
             if compute_nll:
                 out[f"{mode}_nll"] = mean_metric.item() / (2 * noise_variance)
                 out[f"{mode}_all_nll"] = (metric.numpy() / (2 * noise_variance)).tolist()
+            return out
+
+
+#########################
+# quadratic regression dataset
+#########################
+
+
+class QuadraticRegressionDataset(ICLDataset):
+    """
+    ICL dataset for the quadratic task f(x) = sum(x_i^2).
+    x ~ N(0, I_m), y = ||x||^2 (noiseless, scalar output per position).
+    No per-task parameters are needed; the .npz stores a placeholder zeros array
+    so that ICLDataset.__init__ can load it with the expected 'tasks' key.
+    """
+
+    def __init__(self, tasks_path: str, config: Config, dataset_length=None):
+        super().__init__(tasks_path, config, dataset_length)
+
+    def __getitem__(self, i):
+        self.__gettask__()  # advance rng for reproducibility consistency
+        xs = self.rng.standard_normal((self.context_length, self.num_dims)).astype(np.float32)
+        ys = (xs ** 2).sum(axis=1).astype(np.float32)
+        return {"xs": torch.tensor(xs), "labels": torch.tensor(ys)}
+
+    @staticmethod
+    def make_dataset(num_tasks, data_path, rng, num_dims, save=True):
+        """
+        Save a placeholder zeros array so ICLDataset can load a valid .npz.
+        The quadratic task has no per-task parameters.
+        """
+        placeholder = np.zeros((num_tasks, num_dims), dtype=np.float32)
+        if save:
+            np.savez(data_path, tasks=placeholder)
+        else:
+            return placeholder
+
+    @staticmethod
+    def compute_metrics(
+        eval_pred,
+        mode: str = "eval",
+        return_all: bool = False,
+        compute_nll: bool = False,
+        noise_variance=None,
+        return_raw_loss: bool = False,
+    ):
+        """
+        Computes MSE between predicted and true quadratic labels.
+        """
+        predictions, labels = eval_pred
+
+        mse = nn.MSELoss(reduction="none")
+        metric = mse(predictions, labels)
+
+        if return_raw_loss:
+            return torch.mean(metric)
+        else:
+            metric = metric.detach().cpu()
+            mean_metric = torch.mean(metric)
+            metric_per_trial = metric.mean(dim=0)
+
+            out = {}
+            out[f"{mode}_metric"] = mean_metric.item()
+            out[f"{mode}_metric_per_trial"] = metric_per_trial.tolist()
+            if return_all:
+                out[f"{mode}_all_metric"] = metric.tolist()
             return out
 
 
