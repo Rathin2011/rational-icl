@@ -1,8 +1,8 @@
 """Train a transformer on the compositional lookup-table ICL task.
 
-Autoregressive next-token cross-entropy (scored on output tokens only), AdamW,
-sweeping task diversity D. Logs per-type in-distribution and out-of-distribution
-cross-entropy and token accuracy throughout training.
+Training uses comp-only (x, y) sequences with y = f(g(x)). Eval additionally
+logs g_only and f_only metrics. Autoregressive next-token cross-entropy (scored
+on output tokens only), AdamW, sweeping task diversity D.
 
 Usage (from the composition/ directory):
     python train.py --num_tasks 64

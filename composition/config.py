@@ -16,7 +16,6 @@ out contiguously so that a token's identity reveals which alphabet it belongs to
 
 import os
 import json
-from dataclasses import dataclass, asdict
 
 # --- Vocabulary layout (disjoint alphabets) --------------------------------
 X_SIZE = 50
@@ -54,41 +53,52 @@ def read_cache_dir(default=None):
     return default
 
 
-@dataclass
 class CompositionConfig:
-    # Task diversity (D): number of fixed (g, f) tasks sampled once from the prior.
-    num_tasks: int = 64
-    seed: int = 1
+    """Run configuration (plain class for compatibility with Python 3.6+)."""
 
-    # Model (GPT-NeoX backbone)
-    d_model: int = 128           # hidden_size
-    d_ff: int = 512              # intermediate_size
-    n_layers: int = 2
-    n_heads: int = 4
-    max_position_embeddings: int = 128
-
-    # Training
-    batch_size: int = 256
-    learning_rate: float = 1e-3
-    max_steps: int = 100_000
-    warmup_steps: int = 0
-    lr_scheduler_type: str = "constant"
-    weight_decay: float = 0.0
-    max_grad_norm: float = 1.0
-    logging_steps: int = 100
-    eval_steps: int = 1000
-    num_checkpoints: int = 50    # sqrt-spaced checkpoints saved during training
-
-    # Evaluation
-    num_ood_tasks: int = 256     # held-out tasks for the generalization eval
-    n_eval: int = 512            # sequences per eval set
-
-    # IO
-    cache_dir: str = None
-
-    def __post_init__(self):
-        if self.cache_dir is None:
-            self.cache_dir = read_cache_dir()
+    def __init__(
+        self,
+        num_tasks=64,
+        seed=1,
+        d_model=128,
+        d_ff=512,
+        n_layers=2,
+        n_heads=4,
+        max_position_embeddings=128,
+        batch_size=256,
+        learning_rate=1e-3,
+        max_steps=100_000,
+        warmup_steps=0,
+        lr_scheduler_type="constant",
+        weight_decay=0.0,
+        max_grad_norm=1.0,
+        logging_steps=100,
+        eval_steps=1000,
+        num_checkpoints=50,
+        num_ood_tasks=256,
+        n_eval=512,
+        cache_dir=None,
+    ):
+        self.num_tasks = num_tasks
+        self.seed = seed
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.max_position_embeddings = max_position_embeddings
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.max_steps = max_steps
+        self.warmup_steps = warmup_steps
+        self.lr_scheduler_type = lr_scheduler_type
+        self.weight_decay = weight_decay
+        self.max_grad_norm = max_grad_norm
+        self.logging_steps = logging_steps
+        self.eval_steps = eval_steps
+        self.num_checkpoints = num_checkpoints
+        self.num_ood_tasks = num_ood_tasks
+        self.n_eval = n_eval
+        self.cache_dir = cache_dir if cache_dir is not None else read_cache_dir()
         if self.cache_dir is None:
             raise ValueError(
                 "cache_dir is not set; pass --cache_dir or set CACHE_DIR in .env"
@@ -130,7 +140,31 @@ class CompositionConfig:
     def checkpoints_dir(self):
         return os.path.join(self.run_dir, "checkpoints")
 
+    def to_dict(self):
+        return {
+            "num_tasks": self.num_tasks,
+            "seed": self.seed,
+            "d_model": self.d_model,
+            "d_ff": self.d_ff,
+            "n_layers": self.n_layers,
+            "n_heads": self.n_heads,
+            "max_position_embeddings": self.max_position_embeddings,
+            "batch_size": self.batch_size,
+            "learning_rate": self.learning_rate,
+            "max_steps": self.max_steps,
+            "warmup_steps": self.warmup_steps,
+            "lr_scheduler_type": self.lr_scheduler_type,
+            "weight_decay": self.weight_decay,
+            "max_grad_norm": self.max_grad_norm,
+            "logging_steps": self.logging_steps,
+            "eval_steps": self.eval_steps,
+            "num_checkpoints": self.num_checkpoints,
+            "num_ood_tasks": self.num_ood_tasks,
+            "n_eval": self.n_eval,
+            "cache_dir": self.cache_dir,
+        }
+
     def save(self):
         os.makedirs(self.run_dir, exist_ok=True)
         with open(os.path.join(self.run_dir, "config.json"), "w") as fh:
-            json.dump(asdict(self), fh, indent=2)
+            json.dump(self.to_dict(), fh, indent=2)

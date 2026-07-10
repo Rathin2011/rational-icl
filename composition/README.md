@@ -13,14 +13,15 @@ A task is a pair `(g, f)` of deterministic lookup tables:
 Priors (drawn independently, once, and held fixed): `g ~ Uniform(Z^50)`,
 `f ~ Uniform(Y^5)`.
 
-A pool of `D` tasks is sampled and fixed. Each training example:
+A pool of `D` tasks is sampled and fixed. Each **training** example:
 
 1. picks a task `d ~ Uniform({1..D})`,
-2. picks a sequence type `tau ~ Uniform({comp, g_only, f_only})`,
-3. emits 12 interleaved `(input, output)` pairs (sequence length 24):
-   - `comp`:   `x_i ~ Uniform(X)`, output `f(g(x_i))`
-   - `g_only`: `x_i ~ Uniform(X)`, output `g(x_i)`
-   - `f_only`: `z_i ~ Uniform(Z)`, output `f(z_i)`
+2. emits 12 interleaved `(x, y)` pairs (sequence length 24) with `x_i ~ Uniform(X)`,
+   `y_i = f(g(x_i))` (compositional / `comp` only).
+
+**Evaluation** additionally logs `g_only` / `f_only` sequence metrics. The main
+composition test is the **intermediate-variable probe** in `probe_composition.py`
+(activation patching + `f(z')` check), not those sequence accuracies.
 
 The task is never tokenized; the model infers it from the in-context prefix.
 
@@ -44,7 +45,35 @@ ids, so no explicit type token is needed.
 - `data.py`    task sampling, sequence construction, train/eval datasets
 - `model.py`   `GPTNeoXForCausalLM` builder
 - `train.py`   HuggingFace `Trainer` setup, metrics, checkpointing, logging
+- `probe_composition.py`  intermediate-variable composition probe
 - `run_sweep.sh` sweep over `D`
+- `generate_sample.py`  print example g, f, h, and sequences
+
+## Composition probe
+
+Tests whether the model stores an intermediate `z' = g(x')` and applies `f`:
+
+1. ICL context of compositional `(x, y)` pairs for a task `(g, f)`.
+2. Query `x_a` and `x_b ≠ x_a` (true intermediates `z_a`, `z_b`, targets `y_a`, `y_b`).
+3. **Patch:** at bridge layer `L`, replace the residual at the query-`x` position
+   from the `x_a` run with that from the `x_b` run. Success if predicted Y becomes
+   `y_b = f(z_b)`.
+4. **Decode:** from the same residual, take LM-head logits over Z tokens → `ẑ'`,
+   check `f(ẑ') == y'`.
+
+```bash
+# after training, point at a checkpoint
+$PY probe_composition.py \
+  --checkpoint $CACHE_DIR/composition/runs/<run_name>/checkpoints/checkpoint-10000 \
+  --num_tasks 64 --n_trials 200 --task_pool train
+
+# also try held-out tasks
+$PY probe_composition.py --checkpoint ... --num_tasks 64 --task_pool ood
+```
+
+Key metrics: `patch_to_y_b_given_diff_y` (vs chance `1/50`) and `f_of_zhat_acc`.
+High values support composition (C_GG); high clean OOD accuracy with low patch
+success looks like a flat shortcut (G).
 
 ## Setup
 

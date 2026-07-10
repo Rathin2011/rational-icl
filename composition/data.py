@@ -1,9 +1,9 @@
 """Task sampling and datasets for the compositional lookup-table ICL task.
 
 A fixed pool of D tasks {(g, f)} is drawn once from the priors and held constant.
-For each training example we sample a task index and a sequence type, then emit an
-interleaved sequence of (input, output) pairs. The task itself is never tokenized;
-the model must infer (g, f) from the in-context prefix.
+For each training example we sample a task index and emit comp-only (x, y) pairs
+with y = f(g(x)). The task itself is never tokenized; the model must infer (g, f)
+from the in-context prefix. g_only and f_only sequences are used at eval only.
 
 Loss is autoregressive next-token cross-entropy scored ONLY on the deterministic
 output tokens. Input tokens are randomly drawn and unpredictable, so their label
@@ -101,6 +101,41 @@ def _build_sequence(g_row, f_row, rng, seq_type):
     return input_ids, labels
 
 
+def build_comp_probe_sequence(g_row, f_row, context_xs, query_x):
+    """Build a compositional sequence with a fixed context and a query x.
+
+    Context pairs use ``context_xs`` (length NUM_PAIRS - 1). The final input
+    token is ``query_x``; its output slot is filled with the true y for
+    completeness, but the probe reads the model's prediction for that y from
+    the logits at the query-x position.
+
+    Returns
+    -------
+    input_ids : np.ndarray[int64], shape (SEQ_LEN,)
+    query_pos : int
+        Index of the query-x token (even). The model predicts y from this
+        position (logits[query_pos] -> next token).
+    z_query : int
+        True g(query_x).
+    y_query : int
+        True f(g(query_x)).
+    """
+    assert len(context_xs) == NUM_PAIRS - 1
+    input_ids = np.empty(SEQ_LEN, dtype=np.int64)
+    for i, x in enumerate(context_xs):
+        z = int(g_row[x])
+        y = int(f_row[z])
+        input_ids[2 * i] = X_OFFSET + int(x)
+        input_ids[2 * i + 1] = Y_OFFSET + y
+
+    query_pos = 2 * (NUM_PAIRS - 1)
+    z_query = int(g_row[query_x])
+    y_query = int(f_row[z_query])
+    input_ids[query_pos] = X_OFFSET + int(query_x)
+    input_ids[query_pos + 1] = Y_OFFSET + y_query  # placeholder; not used as input to pred
+    return input_ids, query_pos, z_query, y_query
+
+
 # --- Datasets ---------------------------------------------------------------
 class CompositionTrainDataset(IterableDataset):
     """Infinite stream of training sequences (fresh samples every draw)."""
@@ -115,11 +150,9 @@ class CompositionTrainDataset(IterableDataset):
         worker = torch.utils.data.get_worker_info()
         worker_id = worker.id if worker is not None else 0
         rng = np.random.default_rng([self.seed, worker_id, 0xC0FFEE])
-        num_types = len(SEQ_TYPES)
         while True:
             d = int(rng.integers(self.num_tasks))
-            seq_type = SEQ_TYPES[int(rng.integers(num_types))]
-            input_ids, labels = _build_sequence(self.g[d], self.f[d], rng, seq_type)
+            input_ids, labels = _build_sequence(self.g[d], self.f[d], rng, "comp")
             yield {
                 "input_ids": torch.from_numpy(input_ids),
                 "labels": torch.from_numpy(labels),
