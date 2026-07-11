@@ -70,7 +70,7 @@ def get_or_create_tasks(path, num_tasks, seed, regenerate=False):
 def _build_sequence(g_row, f_row, rng, seq_type):
     """Build one interleaved sequence for a single task and sequence type.
 
-    Emits (in_1, out_1, in_2, out_2, ..., in_12, out_12). Output tokens (odd
+    Emits (in_1, out_1, ..., in_K, out_K) with K = NUM_PAIRS. Output tokens (odd
     positions) are scored; input tokens (even positions) are masked with -100.
     """
     input_ids = np.empty(SEQ_LEN, dtype=np.int64)

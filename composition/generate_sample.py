@@ -165,7 +165,7 @@ def main():
     print()
     print("Each training example:")
     print("  1. picks one fixed task (g, f) from the pool of D tasks")
-    print("  2. emits 12 interleaved (x, y) pairs with y = f(g(x))  [comp only]")
+    print("  2. emits 16 interleaved (x, y) pairs with y = f(g(x))  [comp only]")
     print("  3. loss is scored only on output tokens (inputs masked with -100)")
     print()
     print("Training uses comp sequences only. The examples below also show")

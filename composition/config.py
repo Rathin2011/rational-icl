@@ -28,8 +28,9 @@ Y_OFFSET = X_SIZE + Z_SIZE   # 55
 VOCAB_SIZE = X_SIZE + Z_SIZE + Y_SIZE  # 105
 
 # --- Sequence layout --------------------------------------------------------
-NUM_PAIRS = 12
-SEQ_LEN = 2 * NUM_PAIRS       # 24 tokens: interleaved (input, output) pairs
+# Main linear-regression exp uses context_length=16; match that # of demos.
+NUM_PAIRS = 16
+SEQ_LEN = 2 * NUM_PAIRS       # 32 tokens: interleaved (input, output) pairs
 
 # Sequence types, sampled uniformly per training example.
 SEQ_TYPES = ("comp", "g_only", "f_only")
@@ -60,16 +61,18 @@ class CompositionConfig:
         self,
         num_tasks=64,
         seed=1,
-        d_model=128,
-        d_ff=512,
-        n_layers=2,
-        n_heads=4,
+        # Match linear-regression main exp in this repo (Wurgaft-style):
+        # 8 layers, 1 head, d_model=64, mlp expansion 4 -> d_ff=256.
+        d_model=64,
+        d_ff=256,
+        n_layers=8,
+        n_heads=1,
         max_position_embeddings=128,
-        batch_size=256,
-        learning_rate=1e-3,
+        batch_size=128,
+        learning_rate=5e-4,
         max_steps=100_000,
-        warmup_steps=0,
-        lr_scheduler_type="constant",
+        warmup_steps=500,
+        lr_scheduler_type="inverse_sqrt",
         weight_decay=0.0,
         max_grad_norm=1.0,
         logging_steps=100,

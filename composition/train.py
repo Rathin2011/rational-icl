@@ -158,25 +158,61 @@ def run_training(cfg):
         writer.writerows(logs)
     print(f"Wrote logs to {logs_path}")
 
+    # Final error-rate summary (1 - accuracy) for the last eval round.
+    _print_final_error_rates(logs)
+
+
+def _print_final_error_rates(logs):
+    names = [
+        "id_comp",
+        "ood_comp",
+        "id_g_only",
+        "ood_g_only",
+        "id_f_only",
+        "ood_f_only",
+    ]
+    # Merge all dicts that look like the last eval (have any eval_*_accuracy)
+    merged = {}
+    for row in logs:
+        if any(k.startswith("eval_") and k.endswith("_accuracy") for k in row):
+            for k, v in row.items():
+                if v is not None:
+                    merged[k] = v
+    if not merged:
+        return
+    print("\n=== Final token error rates (1 - accuracy) ===")
+    print(f"{'split':<14} {'error':>8}  {'accuracy':>8}")
+    for name in names:
+        key = f"eval_{name}_accuracy"
+        if key not in merged:
+            continue
+        try:
+            acc = float(merged[key])
+            print(f"{name:<14} {(1 - acc) * 100:7.2f}%  {acc * 100:7.2f}%")
+        except (TypeError, ValueError):
+            continue
+    print("(chance error ≈ 98% for Y / 80% for Z)")
+    print(f"Full history: use  python report_errors.py <run_dir> --all-steps")
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train on the compositional lookup task.")
     p.add_argument("--num_tasks", "-D", type=int, default=64, help="Task diversity D")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--max_steps", type=int, default=100_000)
-    p.add_argument("--batch_size", type=int, default=256)
-    p.add_argument("--learning_rate", type=float, default=1e-3)
-    p.add_argument("--lr_scheduler_type", type=str, default="constant")
-    p.add_argument("--warmup_steps", type=int, default=0)
+    p.add_argument("--batch_size", type=int, default=128)
+    p.add_argument("--learning_rate", type=float, default=5e-4)
+    p.add_argument("--lr_scheduler_type", type=str, default="inverse_sqrt")
+    p.add_argument("--warmup_steps", type=int, default=500)
     p.add_argument("--logging_steps", type=int, default=100)
     p.add_argument("--eval_steps", type=int, default=1000)
     p.add_argument("--num_checkpoints", type=int, default=50)
     p.add_argument("--num_ood_tasks", type=int, default=256)
     p.add_argument("--n_eval", type=int, default=512)
-    p.add_argument("--n_layers", type=int, default=2)
-    p.add_argument("--n_heads", type=int, default=4)
-    p.add_argument("--d_model", type=int, default=128)
-    p.add_argument("--d_ff", type=int, default=512)
+    p.add_argument("--n_layers", type=int, default=8)
+    p.add_argument("--n_heads", type=int, default=1)
+    p.add_argument("--d_model", type=int, default=64)
+    p.add_argument("--d_ff", type=int, default=256)
     p.add_argument("--max_position_embeddings", type=int, default=128)
     p.add_argument("--cache_dir", type=str, default=None)
     return p.parse_args()
