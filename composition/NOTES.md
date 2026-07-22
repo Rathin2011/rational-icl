@@ -111,8 +111,67 @@ All three runs finished. **`ood_comp` stayed high** (final ~83–88% error; best
 
 Judge success from **`ood_comp` vs step** (mid-training low OOD = `G`; late rise = `M` transience). If even this never gets low OOD, the issue is deeper than composition (task/training setup), not just failing to find `C_GG`.
 
+### Result: token error looked “high OOD”, but d_rel says G
+
+Closed-form atomic `G` already has ~85% error with K=16 / |X|=50 (most queries unseen). Final `|Z|=45` models sit near that floor (~83–84%), so OOD error alone cannot separate “failed to learn” from “learned `G`”.
+
+**Wurgaft-style check** (`compare_predictors.py`): full Y-softmax vs closed-form `M` (posterior over D train composites) and atomic `G`; symmetrized KL;  
+`d_rel = (r+1)/2` with `r=(d(h,G)-d(h,M))/d(G,M)` → **0≈G, 1≈M**.
+
+Final ckpt-100000, 256 eval seqs × 16 y-slots:
+
+| setting | split | model acc | d_rel | closer |
+|---------|-------|-----------|-------|--------|
+| Z45 D2048 | id | 20.0% | **0.014** | G |
+| Z45 D2048 | ood | 16.4% | **0.205** | G |
+| Z45 D4096 | id | 17.6% | **0.005** | G |
+| Z45 D4096 | ood | 16.6% | **0.198** | G |
+| Z5 D512 | id | 78.9% | **0.685** | M |
+| Z5 D512 | ood | 11.4% | 0.593 | M* |
+| Z5 D2048 | id | 57.9% | **0.385** | mid (G-lean) |
+| Z5 D2048 | ood | 16.7% | 0.592 | M* |
+
+\*On OOD, hard-`M` often has zero consistent train tasks → falls back to Uniform(Y), so OOD `d_rel` toward `M` is less diagnostic than ID.
+
+**Takeaway:** `|Z|=45` runs look like **`G`**, not failed training / `M`. `|Z|=5` D512 ID is **`M`-like**; D2048 ID is mixed (better-than-`G` accuracy but KL still not fully on `M`). Still no low-OOD `C_GG` signal.
+
+JSON dumps: `$CACHE_DIR/composition/analysis/mg_rel_*.json`.
+
+### Next: minimal D sweep toward M (ΔK < 0)
+
+Same `|Z|=45` setup/arch. Ignore OOD token error as success criterion (G floor ~85%); judge by **ID `d_rel` → 1** and ID acc.
+
+**Minimal first pass (submitted after confirm):** D ∈ {4, 64, 512}, N=100k.
+
+| Job ID | Name | D | N |
+|--------|------|---|---|
+| 6819100 | `comp_Z45_D4` | 4 | 100000 |
+| 6819101 | `comp_Z45_D64` | 64 | 100000 |
+| 6819102 | `comp_Z45_D512` | 512 | 100000 |
+
+| D | expected run dir tag |
+|---|----------------------|
+| 4 | `D4-X50-Z45-Y50-...` |
+| 64 | `D64-X50-Z45-Y50-...` |
+| 512 | `D512-X50-Z45-Y50-...` |
+
+After finish: `compare_predictors.py` on final ckpts (ID focus). Expand grid / raise N only if D=4 is not clearly M.
+
+**Results (all three done):**
+
+| D | ID acc | ID d_rel | closer |
+|---|--------|----------|--------|
+| 4 | 95.5% | **0.787** | M |
+| 64 | 91.4% | **0.784** | M |
+| 512 | 37.9% | **0.149** | G |
+| 2048 (prior) | 20.0% | 0.014 | G |
+| 4096 (prior) | 17.6% | 0.005 | G |
+
+D=4 and D=64 are clearly **M**-like. Transition to **G** is between **D=64 and D=512** at N=100k.
+
 ## Misc / open questions
 
 - Ask before submitting SCC jobs.
 - Architecture still not fixed in the write-up; defaults above are provisional.
+- Next: soft/`C_GG` predictor in the same relative-distance pipeline; maybe mid-training `d_rel` curves.
 -
