@@ -254,8 +254,19 @@ def main():
         "checkpoint": args.checkpoint,
         "num_tasks": args.num_tasks,
         "z_size": args.z_size,
+        "max_steps": cfg.max_steps,
         "splits": {},
     }
+    # Infer training horizon / step from path when present
+    import re as _re
+
+    mN = _re.search(r"(\d+)steps", args.checkpoint)
+    mS = _re.search(r"checkpoint-(\d+)", args.checkpoint)
+    if mN:
+        all_out["N"] = int(mN.group(1))
+    if mS:
+        all_out["step"] = int(mS.group(1))
+
     for name, ds in splits:
         print(f"\n=== {name} ===")
         stats = compare(
@@ -272,11 +283,28 @@ def main():
             f"(0=G, 1=M) => closer to {stats['closer_to']}"
         )
 
+    if args.out is None:
+        # Default dump into analysis/ so plot_phase.py always sees new runs
+        tag = f"Z{args.z_size}_D{args.num_tasks}"
+        step = all_out.get("step", "final")
+        args.out = os.path.join(
+            cache_dir, "composition", "analysis", f"mg_rel_{tag}_step{step}.json"
+        )
+
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
         with open(args.out, "w") as fh:
             json.dump(all_out, fh, indent=2)
         print(f"\nWrote {args.out}")
+        # Refresh plots if matplotlib is available
+        try:
+            from plot_phase import main as plot_main
+            import sys as _sys
+
+            _sys.argv = ["plot_phase.py"]
+            plot_main()
+        except Exception as exc:
+            print(f"(plot_phase skipped: {exc})")
 
 
 if __name__ == "__main__":

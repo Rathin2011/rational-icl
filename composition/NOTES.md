@@ -169,9 +169,53 @@ After finish: `compare_predictors.py` on final ckpts (ID focus). Expand grid / r
 
 D=4 and D=64 are clearly **M**-like. Transition to **G** is between **D=64 and D=512** at N=100k.
 
+## Phase 1: C_GG under ΔK > 0 (|Z|=5), then G later
+
+**Goal (mechanistic):** find `(N,D,step)` where bridge-layer patching + `z_decode` succeed (`C_GG`). Only after that, hunt a **G** point on the **same** alphabet and show patching fails. Low OOD is not a gate.
+
+**Config:** `Z_SIZE=5` again (`X50-Z5-Y50` path tags).
+
+**Phase 1 train (submitted after confirm):**
+
+| Job ID | Name | D | N |
+|--------|------|---|---|
+| 6822414 | `comp_Z5_D4096` | 4096 | 100000 |
+| 6822415 | `comp_Z5_D8192` | 8192 | 100000 |
+
+Also reuse older untagged `|Z|=5` D=512/1024/2048 runs as extra probe candidates if useful.
+
+**Probe metric:** `probe_composition.py` layer sweep — pass if some layer has `z_decode ≫ chance` and compositional patch signal.
+
+### Phase 1 probe: D8192 final (done) — no C_GG signature
+
+`checkpoint-100000`, 200 trials, train pool. `|Z|=5` ⇒ `chance_z=0.20`.
+
+| layer | clean_acc_b | patch\|diff_y | z_decode | f(z_hat)=y' |
+|-------|-------------|---------------|----------|-------------|
+| 0–7 | ~0.27–0.36 | ~0.26–0.35 | **~0.19–0.24** | ~0.20–0.26 |
+
+`z_decode ≈ chance`; `patch_to_y_b ≈ clean_acc_b` (Y already in residual), same pattern as flat G — **not** a C_GG hit at final step.
+
+### Phase 1 probe: D4096 final — also no C_GG
+
+Same protocol. Clean ID acc higher (~0.48–0.57) than D8192, but `z_decode ~0.18–0.24` (≈ chance 0.20) and patch tracks clean Y — **not** C_GG. Next: mid-training ckpts, or change (N,D) / training mix.
+
+### Predictor phase plots (M vs G; C_GG TBD)
+
+After each `compare_predictors.py` run (or manually):
+
+```bash
+python plot_phase.py
+```
+
+Writes `$CACHE_DIR/composition/analysis/predictor_results.csv` and figs under `analysis/figs/`:
+- `d_rel_vs_D_Z{5,45}_id_comp.png` — ID `d_rel` vs D (0=G, 1=M)
+- `phase_scatter_id_comp.png` — (D, N) colored by closer_to
+
+C_GG is a reserved third label once we add a compositional closed-form scorer.
+
 ## Misc / open questions
 
 - Ask before submitting SCC jobs.
 - Architecture still not fixed in the write-up; defaults above are provisional.
-- Next: soft/`C_GG` predictor in the same relative-distance pipeline; maybe mid-training `d_rel` curves.
 -

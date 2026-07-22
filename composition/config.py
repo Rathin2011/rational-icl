@@ -1,12 +1,12 @@
 """Configuration and vocabulary layout for the compositional lookup-table ICL task.
 
 A task is a pair (g, f) of deterministic lookup tables:
-    g: X -> Z   (|X| = 50, |Z| = 45)
-    f: Z -> Y   (|Z| = 45, |Y| = 50)
+    g: X -> Z   (|X| = 50, |Z| = 5)
+    f: Z -> Y   (|Z| = 5, |Y| = 50)
 with composite h(x) = f(g(x)).
 
-Current default |Z|=45 is the ΔK < 0 (shortcut / {G,M}) setting from the notes.
-Earlier bottleneck runs used |Z|=5 (ΔK > 0); task/run paths include alphabet sizes
+Current default |Z|=5 is the ΔK > 0 (bottleneck / hoped C_GG) setting from the notes.
+Earlier shortcut runs used |Z|=45 (ΔK < 0); task/run paths include alphabet sizes
 so those caches do not collide.
 
 The vocabulary is the disjoint union X | Z | Y. Token ids are laid out
@@ -19,7 +19,7 @@ import json
 
 # --- Vocabulary layout (disjoint alphabets) --------------------------------
 X_SIZE = 50
-Z_SIZE = 45
+Z_SIZE = 5
 Y_SIZE = 50
 
 X_OFFSET = 0
