@@ -1,17 +1,17 @@
 """Configuration and vocabulary layout for the compositional lookup-table ICL task.
 
 A task is a pair (g, f) of deterministic lookup tables:
-    g: X -> Z   (|X| = 50, |Z| = 5)
-    f: Z -> Y   (|Z| = 5,  |Y| = 50)
+    g: X -> Z   (|X| = 50, |Z| = 45)
+    f: Z -> Y   (|Z| = 45, |Y| = 50)
 with composite h(x) = f(g(x)).
 
-The vocabulary is the disjoint union X | Z | Y (105 tokens). Token ids are laid
-out contiguously so that a token's identity reveals which alphabet it belongs to
-(this is how the model infers the sequence type without an explicit type token):
+Current default |Z|=45 is the ΔK < 0 (shortcut / {G,M}) setting from the notes.
+Earlier bottleneck runs used |Z|=5 (ΔK > 0); task/run paths include alphabet sizes
+so those caches do not collide.
 
-    X : ids 0..49
-    Z : ids 50..54
-    Y : ids 55..104
+The vocabulary is the disjoint union X | Z | Y. Token ids are laid out
+contiguously so that a token's identity reveals which alphabet it belongs to
+(this is how the model infers the sequence type without an explicit type token).
 """
 
 import os
@@ -19,13 +19,13 @@ import json
 
 # --- Vocabulary layout (disjoint alphabets) --------------------------------
 X_SIZE = 50
-Z_SIZE = 5
+Z_SIZE = 45
 Y_SIZE = 50
 
 X_OFFSET = 0
-Z_OFFSET = X_SIZE            # 50
-Y_OFFSET = X_SIZE + Z_SIZE   # 55
-VOCAB_SIZE = X_SIZE + Z_SIZE + Y_SIZE  # 105
+Z_OFFSET = X_SIZE
+Y_OFFSET = X_SIZE + Z_SIZE
+VOCAB_SIZE = X_SIZE + Z_SIZE + Y_SIZE
 
 # --- Sequence layout --------------------------------------------------------
 # Main linear-regression exp uses context_length=16; match that # of demos.
@@ -117,20 +117,29 @@ class CompositionConfig:
         return os.path.join(self.setting_dir, "tasks")
 
     @property
+    def alphabet_tag(self):
+        return f"X{X_SIZE}-Z{Z_SIZE}-Y{Y_SIZE}"
+
+    @property
     def train_tasks_path(self):
-        return os.path.join(self.tasks_dir, f"train-D{self.num_tasks}-seed{self.seed}.npz")
+        return os.path.join(
+            self.tasks_dir,
+            f"train-D{self.num_tasks}-{self.alphabet_tag}-seed{self.seed}.npz",
+        )
 
     @property
     def ood_tasks_path(self):
         # OOD tasks are drawn from the same prior with a disjoint seed.
         return os.path.join(
-            self.tasks_dir, f"ood-D{self.num_ood_tasks}-seed{self.seed + 1000}.npz"
+            self.tasks_dir,
+            f"ood-D{self.num_ood_tasks}-{self.alphabet_tag}-seed{self.seed + 1000}.npz",
         )
 
     @property
     def run_name(self):
         return (
-            f"D{self.num_tasks}-{self.n_layers}L-{self.n_heads}H-{self.d_model}d"
+            f"D{self.num_tasks}-{self.alphabet_tag}-"
+            f"{self.n_layers}L-{self.n_heads}H-{self.d_model}d"
             f"-{self.d_ff}ff-lr{self.learning_rate}-bs{self.batch_size}"
             f"-{self.max_steps}steps-seed{self.seed}"
         )

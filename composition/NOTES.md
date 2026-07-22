@@ -79,6 +79,38 @@ python report_errors.py $CACHE_DIR/composition/runs/D1024-8L-1H-64d-* --all-step
 
 Success signal: `ood_comp` error clearly below ~90% (chance ~98%) for some stretch of training.
 
+### Result: failed (no C_GG precondition)
+
+All three runs finished. **`ood_comp` stayed high** (final ~83–88% error; best mid-run still ~78%, and then only when ID was also bad). ID improved with training while OOD did not — looks like **`M`**, not generalization.
+
+**Why this kills `C_GG` for these runs:** `C_GG` (and flat `G`) both require **low OOD** on new `(g,f)`. High OOD means we never entered a generalizing phase, so there is nothing compositional to claim. Probe is not meaningful until OOD is low.
+
+| D | final id_comp err | final ood_comp err |
+|---|-------------------|--------------------|
+| 512 | 20.9% | 88.4% |
+| 1024 | 29.9% | 85.9% |
+| 2048 | 42.8% | 83.1% |
+
+## Next experiment: M vs G only (ΔK < 0)
+
+**Goal:** Drop composition from the hypothesis space (write-up §5.2) and ask a simpler question: **can we ever get low `ood_comp` (= recover `G`)** in this lookup ICL setup?
+
+**Setup:** `|Z|=45` with `|X|=|Y|=50` so **ΔK < 0** → phase diagram is only **`{G, M}`** (no `C_GG` region). Same architecture/hparams as above. `config.py` default is now `Z_SIZE=45`; task/run paths include `X50-Z45-Y50` so they do not overwrite `|Z|=5` caches.
+
+**SCC jobs (submitted 2026-07-21, after confirm):**
+
+| Job ID | Name | D | N |
+|--------|------|---|---|
+| 6817771 | `comp_Z45_D2048` | 2048 | 100000 |
+| 6817772 | `comp_Z45_D4096` | 4096 | 100000 |
+
+**Expected run dirs:**
+
+- `D2048-X50-Z45-Y50-8L-1H-64d-256ff-lr0.0005-bs128-100000steps-seed1`
+- `D4096-X50-Z45-Y50-8L-1H-64d-256ff-lr0.0005-bs128-100000steps-seed1`
+
+Judge success from **`ood_comp` vs step** (mid-training low OOD = `G`; late rise = `M` transience). If even this never gets low OOD, the issue is deeper than composition (task/training setup), not just failing to find `C_GG`.
+
 ## Misc / open questions
 
 - Ask before submitting SCC jobs.
