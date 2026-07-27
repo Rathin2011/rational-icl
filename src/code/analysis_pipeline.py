@@ -214,7 +214,14 @@ class AnalysisPipeline:
                         )
                         transformer_df, history, model = model_fitter.fit()
                     if make_figs:
-                        fig_gen = FigureGenerator(transformer_df, transformer_df_all_checkpoints, algo_df, self.setting, self.algo_names_dict)
+                        # figs_dir defaults to here("figures"); do not pass algo_names_dict as 5th arg
+                        # (FigureGenerator reads algo names from algo_df).
+                        fig_gen = FigureGenerator(
+                            transformer_df,
+                            transformer_df_all_checkpoints,
+                            algo_df,
+                            self.setting,
+                        )
                         fixed_values = {"context_length": context_length, "mlp_expansion_factor": mlp_expansion_factor, "num_dims": num_dims}
                         fixed_values_task_div_threshold_plot = {"context_length": context_length, "mlp_expansion_factor": mlp_expansion_factor, "num_dims": num_dims, "checkpoint": self.exp_params["save_steps"][-1]}
                         if self.setting == "classification":

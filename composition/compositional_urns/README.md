@@ -16,14 +16,24 @@ test. See **[PROTOCOL.md](PROTOCOL.md)** for the full experimental spec.
 | `probe.py` | Shared-prefix patching + $z$_decode |
 | `test_predictors.py` | Unit tests (approx vs exact on short $L$) |
 
-Training loop / SCC launchers are not included yet — predictors and gates are
-the review blockers that had to land first.
+Training loop / SCC launchers are included.
 
-## Quick checks
+## Train (SCC)
 
 ```bash
 cd /projectnb/buinlp/rathin/rational-icl/composition/compositional_urns
-python test_predictors.py
+mkdir -p logs
+bash run_launch.sh          # Phase-1 + baseline
+# After Phase-1 gate passes:
+qsub -N cu_phase2 train_scc.sh 2
+```
+
+Local:
+```bash
+python train.py --phase 1
+python train.py --phase baseline
+python train.py --phase 2 --resume_from /path/to/checkpoint-XXXX
+python eval_checkpoint.py --checkpoint /path/to/ckpt --out_json metrics.json
 ```
 
 ## Critical design locks (from review)

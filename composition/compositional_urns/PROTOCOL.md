@@ -19,11 +19,11 @@ $g$/$f$ Bayes gates, $z$_decode, measurement locks).
 | Arch | **2 layers, 4 heads, $d=128$, $d_{ff}=512$**, context 128 (Wurgaft 1L/64d is out of scope) |
 | Opt | AdamW lr $10^{-3}$, wd $0.01$, linear warmup 1000, then constant; bs 256 |
 | Patch layer | residual **after layer 0**; also log layer 1 |
-| Patch context | **same ICL prefix**; only query $x$ differs |
+| Patch design | **cross-task**: source/destination residuals from distinct tasks $d_{\mathrm{src}}\ne d_{\mathrm{dst}}$ |
 | Distance | **symmetrized KL** on $Y$-slice softmax |
 | Soft 3-way weight | $d_Q^{\mathrm{rel}} = d(h,Q) / \sum_{Q'\in\{M,G,\mathrm{C}_{GG}\}} d(h,Q')$ |
 | Success margin $\varepsilon$ | $d_{\mathrm{C}_{GG}}^{\mathrm{rel}}$ strictly smallest **and** $\ge \varepsilon$ below next-best with $\varepsilon=0.05$ |
-| Patch margin | mean $\mathrm{KL}_{\mathrm{route}} + 0.05 \le \mathrm{KL}_{\mathrm{short}}$ over 200 triples |
+| Patch margin | mean $\mathrm{KL}_{\mathrm{route}} + 0.05 \le \mathrm{KL}_{\mathrm{transplant}}$ **and** $\le \mathrm{KL}_{\mathrm{unaffected}}$, over 200 accepted triples |
 | $z$_decode gate | accuracy $\ge 0.4$ (chance $=1/6\approx 0.167$) |
 
 ---
@@ -142,16 +142,34 @@ Helpers: [`phase1_gate.py`](phase1_gate.py).
 - Soft 3-way $d_Q^{\mathrm{rel}}$ for $Q\in\{M,G,\mathrm{C}_{GG}\}$ on **comp** (ID + OOD)
 - “$\mathrm{C}_{GG}$ wins” requires ID **and** OOD, with margin $\varepsilon$
 
-**Mechanistic (200 triples):**
+**Mechanistic (200 triples), cross-task:**
 
-1. Sample task $d$ and $x_a,x_b$ with $\arg\max_z w_g[x_a]\ne\arg\max_z w_g[x_b]$
-2. Shared prefix; run query $x_a$ (save layer-0 residual) and query $x_b$
-3. **Patch $h_a$ into the $x_b$ forward** at the query-$x$ position
-4. $\mathrm{KL}_{\mathrm{route}}$: patched vs marginal $f(g(x_a))$; $\mathrm{KL}_{\mathrm{short}}$: patched vs $f(g(x_b))$
-5. Success needs $\mathrm{KL}_{\mathrm{route}}+0.05\le\mathrm{KL}_{\mathrm{short}}$ (routing keeps $z_a$)
-6. Also: **clean** (unpatched) KLs on the $x_b$ run; **$z$_decode** from $h_a$ (LM-head $Z$ slice)
+Same-task patching (one shared task, two queries) cannot distinguish genuine
+routing from shortcut task-recognition: with a single $(w_g,w_f)$, both
+candidate answers are values that task already produces on its own for some
+query. Trials are therefore **cross-task**: source and destination residuals
+come from two *distinct* pretraining tasks, so the routed target is a value
+neither task produces alone.
 
-Stub: [`probe.py`](probe.py).
+1. Sample distinct tasks $d_{\mathrm{src}} \ne d_{\mathrm{dst}}$ and independent
+   queries $x_{\mathrm{src}}, x_{\mathrm{dst}} \sim \mathrm{Unif}(X)$.
+   $z_{\mathrm{src}} = \arg\max_z w_g^{(d_{\mathrm{src}})}[x_{\mathrm{src}}]$ (modal intermediate).
+2. Three candidates: $\mathrm{routed}=f_{\mathrm{dst}}(z_{\mathrm{src}})$ (row lookup);
+   $\mathrm{transplant}=f_{\mathrm{src}}(g_{\mathrm{src}}(x_{\mathrm{src}}))$ (source's own finished answer);
+   $\mathrm{unaffected}=f_{\mathrm{dst}}(g_{\mathrm{dst}}(x_{\mathrm{dst}}))$ (destination's own finished answer).
+3. **Discriminating-trial filter**: accept only if the three candidates'
+   $\arg\max$ are pairwise distinct (retry, bounded); report accept rate.
+4. Independent prefixes for source and destination (same length so query
+   position aligns); capture $h_{\mathrm{src}}$ at layer 0, query position, from
+   the source run; **patch into the destination run** at the same position.
+5. $\mathrm{KL}_{\mathrm{route}}$, $\mathrm{KL}_{\mathrm{transplant}}$, $\mathrm{KL}_{\mathrm{unaffected}}$: patched
+   output vs each candidate.
+6. Success needs $\mathrm{KL}_{\mathrm{route}}+0.05\le\mathrm{KL}_{\mathrm{transplant}}$ **and**
+   $\mathrm{KL}_{\mathrm{route}}+0.05\le\mathrm{KL}_{\mathrm{unaffected}}$ (route beats both controls)
+7. Also: **clean** (unpatched) KLs on the destination run; **$z$_decode** from
+   $h_{\mathrm{src}}$ (LM-head $Z$ slice) vs $z_{\mathrm{src}}$
+
+Implementation: [`probe.py`](probe.py).
 
 ---
 
@@ -167,10 +185,10 @@ Framework expects **no** routing signature.
 **$\mathrm{C}_{GG}$ emerged** (all):
 
 1. Soft $d_{\mathrm{C}_{GG}}^{\mathrm{rel}}$ smallest among $\{M,G,\mathrm{C}_{GG}\}$ (ID+OOD) with margin $\varepsilon$
-2. $\mathrm{KL}_{\mathrm{route}} + 0.05 \le \mathrm{KL}_{\mathrm{short}}$
+2. $\mathrm{KL}_{\mathrm{route}} + 0.05 \le \mathrm{KL}_{\mathrm{transplant}}$ **and** $\mathrm{KL}_{\mathrm{route}} + 0.05 \le \mathrm{KL}_{\mathrm{unaffected}}$
 3. $z$_decode $\ge 0.4$
 4. Baseline fails (2) or (3)
 
-**Falsified:** Phase-1 gate passed; every Phase-2 ckpt has $\mathrm{KL}_{\mathrm{route}}\ge\mathrm{KL}_{\mathrm{short}}$ despite low OOD comp CE.
+**Falsified:** Phase-1 gate passed; every Phase-2 ckpt has $\mathrm{KL}_{\mathrm{route}}\ge\min(\mathrm{KL}_{\mathrm{transplant}},\mathrm{KL}_{\mathrm{unaffected}})$ despite low OOD comp CE.
 
-**Inconclusive:** Phase-1 gate fails; or patching ambiguous ($|\mathrm{KL}_{\mathrm{route}}-\mathrm{KL}_{\mathrm{short}}|<0.05$) with weak $z$_decode.
+**Inconclusive:** Phase-1 gate fails; or patching ambiguous (route fails to clear the 0.05 margin over both controls) with weak $z$_decode; or the discriminating-trial filter's accept rate is too low to reach 200 triples in a reasonable budget.

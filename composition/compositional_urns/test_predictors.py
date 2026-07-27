@@ -91,6 +91,25 @@ def test_soft_rel_weights():
     assert w["C_GG"] == max(w.values())
 
 
+def test_concentration_actually_changes_predictors():
+    """Regression guard: threading concentration through must not be a no-op."""
+    prefix_xz = [(0, 1), (0, 1), (0, 3)]
+    p_diffuse = g_predictive(prefix_xz, query_x=0, concentration=1.0)
+    p_sharp = g_predictive(prefix_xz, query_x=0, concentration=0.05)
+    assert not np.allclose(p_diffuse, p_sharp)
+    # sharper prior should let the observed counts dominate more strongly
+    assert p_sharp[1] > p_diffuse[1]
+
+    prefix_xy = [(0, 5), (1, 5), (2, 5)]
+    q_diffuse = approx_C_GG_predictive(prefix_xy, query_x=0)
+    q_sharp = approx_C_GG_predictive(
+        prefix_xy, query_x=0, g_concentration=0.05, f_concentration=0.05
+    )
+    assert not np.allclose(q_diffuse, q_sharp)
+    for q in (q_diffuse, q_sharp):
+        assert np.all(q >= 0) and np.isclose(q.sum(), 1.0)
+
+
 if __name__ == "__main__":
     test_g_f_predictive_uniform_prior()
     test_g_predictive_updates()
@@ -99,4 +118,5 @@ if __name__ == "__main__":
     test_memorizing_M_shapes()
     test_atomic_G()
     test_soft_rel_weights()
+    test_concentration_actually_changes_predictors()
     print("All predictor tests passed.")

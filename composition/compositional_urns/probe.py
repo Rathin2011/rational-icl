@@ -1,11 +1,26 @@
-"""Mechanistic probe: shared-prefix patching + z_decode (PROTOCOL.md).
+"""Mechanistic probe: cross-task patching + z_decode.
+
+Cross-task design (not same-task): source and destination residuals come
+from two DISTINCT pretraining tasks. This matters for this specific task
+family, not just as a stylistic choice -- with a single shared task, both
+candidate answers are values that task already produces on its own for some
+query, so a model that merely recognizes "this is task d" and applies its
+ordinary per-task computation can land near either candidate without any
+transportable z representation. Cross-task patching removes that confound:
+the "routed" target f_dst(z_src) is a value NEITHER task produces on its
+own, which is what makes a positive result unambiguous. See
+apoorvkh/composing-functions (Khandelwal & Pavlick, arXiv:2510.01685) for
+the same design choice in a different (weight-resident, non-ICL) setting.
 
 Locks
 -----
 - Patch residual after layer 0 (also log layer 1)
-- Same ICL prefix for x_a and x_b; only query x differs
-- Targets are full composite marginals Σ_z w_g[x,z] w_f[z,:]
-- Report KL_route, KL_short, clean controls, z_decode accuracy
+- Cross-task: d_src != d_dst, independent queries x_src, x_dst
+- Three candidates per trial: routed = f_dst(z_src_mode), transplant =
+  f_src(g_src(x_src)), unaffected = f_dst(g_dst(x_dst)) -- only accepted if
+  all three are argmax-distinct (the discriminating-trial filter)
+- Report KL_route, KL_transplant, KL_unaffected, clean controls, z_decode
+  accuracy, and trial accept rate
 """
 
 from __future__ import annotations
@@ -93,17 +108,56 @@ def decode_z_lm_head(model, hidden) -> int:
     return int(z_logits.argmax().item())
 
 
-def sample_diff_mode_pair(w_g: np.ndarray, rng: np.random.Generator) -> Tuple[int, int]:
-    """Sample (x_a, x_b) with different argmax_z w_g[x]."""
-    for _ in range(1000):
-        xa = int(rng.integers(X_SIZE))
-        xb = int(rng.integers(X_SIZE))
-        if xa == xb:
-            continue
-        if int(w_g[xa].argmax()) != int(w_g[xb].argmax()):
-            return xa, xb
-    # fallback
-    return 0, 1
+def sample_cross_task_trial(
+    w_g_pool: np.ndarray,
+    w_f_pool: np.ndarray,
+    rng: np.random.Generator,
+    max_tries: int = 1000,
+) -> Optional[Dict]:
+    """Draw a cross-task patching trial, filtered for discriminating power.
+
+    Only accepted if routed/transplant/unaffected are pairwise argmax-distinct
+    -- the property that guarantees the routed target is a value neither task
+    produces on its own, so a route-favoring patched output can't be
+    explained by shortcut task-recognition alone. Returns None if no
+    qualifying trial is found within max_tries (caller should skip/retry).
+    """
+    D = w_g_pool.shape[0]
+    if D < 2:
+        raise ValueError("Cross-task patching needs at least 2 pretraining tasks")
+
+    for _ in range(max_tries):
+        d_src, d_dst = (int(i) for i in rng.choice(D, size=2, replace=False))
+        x_src = int(rng.integers(X_SIZE))
+        x_dst = int(rng.integers(X_SIZE))
+
+        w_g_src, w_f_src = w_g_pool[d_src], w_f_pool[d_src]
+        w_g_dst, w_f_dst = w_g_pool[d_dst], w_f_pool[d_dst]
+
+        z_src_mode = int(w_g_src[x_src].argmax())
+
+        row = w_f_dst[z_src_mode]
+        routed = row / row.sum()
+        transplant = composite_marginal(w_g_src, w_f_src, x_src)
+        unaffected = composite_marginal(w_g_dst, w_f_dst, x_dst)
+
+        labels = {int(routed.argmax()), int(transplant.argmax()), int(unaffected.argmax())}
+        if len(labels) == 3:
+            return {
+                "d_src": d_src,
+                "d_dst": d_dst,
+                "x_src": x_src,
+                "x_dst": x_dst,
+                "z_src_mode": z_src_mode,
+                "w_g_src": w_g_src,
+                "w_f_src": w_f_src,
+                "w_g_dst": w_g_dst,
+                "w_f_dst": w_f_dst,
+                "routed": routed,
+                "transplant": transplant,
+                "unaffected": unaffected,
+            }
+    return None
 
 
 @torch.no_grad()
@@ -116,97 +170,132 @@ def run_patching_probe(
     layer: int = PATCH_LAYER,
     seed: int = 1,
 ) -> Dict[str, float]:
-    """Average KL_route / KL_short / clean controls / z_decode over triples."""
+    """Cross-task patching: patch the source's captured residual (query
+    x_src, task d_src) into the destination's forward pass (query x_dst,
+    task d_dst != d_src). See module docstring for the three candidates.
+    """
     model.eval()
     rng = np.random.default_rng(seed)
-    D = w_g_pool.shape[0]
 
-    kl_route = []
-    kl_short = []
-    kl_clean_route = []
-    kl_clean_short = []
+    kl_route, kl_transplant, kl_unaffected = [], [], []
+    kl_clean_route, kl_clean_transplant, kl_clean_unaffected = [], [], []
     z_hit = []
+    n_attempted = 0
+    n_accepted = 0
+    max_attempts = max(n_triples * 20, 20)
 
-    for _ in range(n_triples):
-        d = int(rng.integers(D))
-        w_g, w_f = w_g_pool[d], w_f_pool[d]
-        xa, xb = sample_diff_mode_pair(w_g, rng)
+    while n_accepted < n_triples and n_attempted < max_attempts:
+        n_attempted += 1
+        trial = sample_cross_task_trial(w_g_pool, w_f_pool, rng)
+        if trial is None:
+            continue
 
-        # Shared context RNG stream: build prefix once, reuse ids skeleton
-        ids_a, pairs, qpos = build_shared_prefix_comp_sequence(
-            w_g, w_f, rng, query_x=xa, num_context_pairs=NUM_PAIRS - 1
+        ids_src, _, qpos_src = build_shared_prefix_comp_sequence(
+            trial["w_g_src"],
+            trial["w_f_src"],
+            rng,
+            query_x=trial["x_src"],
+            num_context_pairs=NUM_PAIRS - 1,
         )
-        ids_b = ids_a.copy()
-        ids_b[qpos] = X_OFFSET + xb
+        ids_dst, _, qpos_dst = build_shared_prefix_comp_sequence(
+            trial["w_g_dst"],
+            trial["w_f_dst"],
+            rng,
+            query_x=trial["x_dst"],
+            num_context_pairs=NUM_PAIRS - 1,
+        )
+        assert qpos_src == qpos_dst, "source/destination prefixes must be the same length"
+        qpos = qpos_src
 
-        t_a = torch.tensor(ids_a, dtype=torch.long).unsqueeze(0)
-        t_b = torch.tensor(ids_b, dtype=torch.long).unsqueeze(0)
+        t_src = torch.tensor(ids_src, dtype=torch.long).unsqueeze(0)
+        t_dst = torch.tensor(ids_dst, dtype=torch.long).unsqueeze(0)
 
-        logits_a, h_a = capture_hidden(model, t_a, layer, qpos, device)
-        logits_b, h_b = capture_hidden(model, t_b, layer, qpos, device)
+        _, h_src = capture_hidden(model, t_src, layer, qpos, device)
+        logits_dst_clean, _ = capture_hidden(model, t_dst, layer, qpos, device)
+        logits_patched = patched_forward(model, t_dst, layer, qpos, h_src, device)
 
-        # Patch b's residual into a's forward
-        logits_p = patched_forward(model, t_a, layer, qpos, h_b, device)
+        p_clean = y_dist_from_logits(logits_dst_clean, qpos)
+        p_patch = y_dist_from_logits(logits_patched, qpos)
 
-        p_clean = y_dist_from_logits(logits_a, qpos)
-        p_patch = y_dist_from_logits(logits_p, qpos)
+        routed, transplant, unaffected = trial["routed"], trial["transplant"], trial["unaffected"]
 
-        route = composite_marginal(w_g, w_f, xa)
-        short = composite_marginal(w_g, w_f, xb)
+        kl_route.append(sym_kl(p_patch, routed))
+        kl_transplant.append(sym_kl(p_patch, transplant))
+        kl_unaffected.append(sym_kl(p_patch, unaffected))
+        kl_clean_route.append(sym_kl(p_clean, routed))
+        kl_clean_transplant.append(sym_kl(p_clean, transplant))
+        kl_clean_unaffected.append(sym_kl(p_clean, unaffected))
 
-        # After patching with h_b, routing target is f(g(x_a))? PROTOCOL:
-        # KL_route: patched → marginal f(g(x_a))  (routing: still apply f to patched z from b?)
-        # Re-read PROTOCOL from user + design review:
-        #   KL_route: patched output to marginal f(g(x_a))
-        #   KL_short: patched output to marginal f(g(x_b))
-        # If we patch x_b residual into x_a run, C_GG should produce f(g(x_b)) = short.
-        # Wait - user's original:
-        #   "KL_route: KL from patched output to the marginal f(g(x_a)) (routing target)"
-        #   "KL_short: KL from patched output to the marginal f(g(x_b)) (shortcut target)"
-        # And success: KL_route < KL_short
-        #
-        # Lookuptable probe patches x_b into x_a and expects y_b (composition).
-        # So for C_GG, patched should match short = f(g(x_b)), meaning KL_short should be SMALLER.
-        # User said KL_route < KL_short for success — that would mean closer to f(g(x_a)) after
-        # patching in x_b's residual, which is the opposite of composition!
-        #
-        # Re-read user message carefully:
-        # 1. Forward with x_a, save residual at x_a
-        # 2. Forward with x_b, patch in the saved residual (from x_a) at same position
-        # 3. KL_route to f(g(x_a)), KL_short to f(g(x_b))
-        # Success: KL_route < KL_short
-        #
-        # So they patch x_a's residual INTO x_b's forward. Then routing keeps z_a → f(g(x_a)).
-        # I'll follow the user's order: save from a, patch into b's run.
+        z_hat = decode_z_lm_head(model, h_src)
+        z_hit.append(float(z_hat == trial["z_src_mode"]))
 
-        # Redo with user's order: patch h_a into forward on ids_b
-        logits_p = patched_forward(model, t_b, layer, qpos, h_a, device)
-        p_patch = y_dist_from_logits(logits_p, qpos)
-        p_clean_b = y_dist_from_logits(logits_b, qpos)
-
-        kl_route.append(sym_kl(p_patch, route))
-        kl_short.append(sym_kl(p_patch, short))
-        kl_clean_route.append(sym_kl(p_clean_b, route))
-        kl_clean_short.append(sym_kl(p_clean_b, short))
-
-        z_hat = decode_z_lm_head(model, h_a)
-        z_true = int(w_g[xa].argmax())  # mode; soft tasks — report vs mode
-        z_hit.append(float(z_hat == z_true))
+        n_accepted += 1
 
     def mean(xs):
         return float(np.mean(xs)) if xs else float("nan")
 
+    route_mean = mean(kl_route)
+    transplant_mean = mean(kl_transplant)
+    unaffected_mean = mean(kl_unaffected)
+
     out = {
-        "kl_route": mean(kl_route),
-        "kl_short": mean(kl_short),
+        "kl_route": route_mean,
+        "kl_transplant": transplant_mean,
+        "kl_unaffected": unaffected_mean,
         "kl_clean_route": mean(kl_clean_route),
-        "kl_clean_short": mean(kl_clean_short),
+        "kl_clean_transplant": mean(kl_clean_transplant),
+        "kl_clean_unaffected": mean(kl_clean_unaffected),
         "z_decode_acc": mean(z_hit),
         "patch_margin_ok": float(
-            mean(kl_route) + PATCH_KL_MARGIN <= mean(kl_short)
+            (route_mean + PATCH_KL_MARGIN <= transplant_mean)
+            and (route_mean + PATCH_KL_MARGIN <= unaffected_mean)
         ),
         "z_decode_ok": float(mean(z_hit) >= Z_DECODE_MIN),
         "layer": layer,
-        "n_triples": n_triples,
+        "n_triples": n_accepted,
+        "n_attempted": n_attempted,
+        "trial_accept_rate": n_accepted / max(n_attempted, 1),
     }
     return out
+
+
+def route_margin(probe_result: Dict[str, float]) -> float:
+    """How convincingly `route` beats the worse of the two controls.
+
+    Positive means route is closer to the patched output than either
+    control; larger is stronger evidence of routing. This is the score
+    select_best_patch_layer optimizes over candidate layers.
+    """
+    return min(probe_result["kl_transplant"], probe_result["kl_unaffected"]) - probe_result[
+        "kl_route"
+    ]
+
+
+def select_best_patch_layer(
+    model,
+    w_g_pool: np.ndarray,
+    w_f_pool: np.ndarray,
+    device: str,
+    n_layers: int,
+    val_seed: int = 1000,
+    n_val_triples: int = 50,
+) -> Tuple[int, Dict[int, Dict[str, float]]]:
+    """Pick the patch layer with the strongest route-vs-controls margin on a
+    VALIDATION trial set. Caller should re-score on a DISJOINT test seed at
+    the selected layer for final reporting -- selecting and reporting on the
+    same trials inflates the effect (same pitfall the junta-protocol
+    document flags for this kind of test).
+    """
+    per_layer = {}
+    for layer in range(n_layers):
+        per_layer[layer] = run_patching_probe(
+            model,
+            w_g_pool,
+            w_f_pool,
+            device,
+            n_triples=n_val_triples,
+            layer=layer,
+            seed=val_seed,
+        )
+    best_layer = max(per_layer, key=lambda l: route_margin(per_layer[l]))
+    return best_layer, per_layer

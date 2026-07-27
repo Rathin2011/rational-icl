@@ -23,8 +23,19 @@ from config import (
 )
 
 
-def sample_tasks(num_tasks: int, seed: int) -> Tuple[np.ndarray, np.ndarray]:
+def sample_tasks(
+    num_tasks: int,
+    seed: int,
+    g_concentration: float = 1.0,
+    f_concentration: float = 1.0,
+) -> Tuple[np.ndarray, np.ndarray]:
     """Sample row-stochastic (w_g, w_f) from independent Dirichlet row priors.
+
+    Concentration < 1 sharpens rows toward a few dominant outcomes (more
+    exploitable signal, less diffuse); concentration = 1.0 (default) is the
+    original uniform-on-simplex behavior. Whatever concentration is used
+    here must match the prior passed to the "exact Bayes" predictors in
+    predictors.py, or those stop being genuinely Bayes-optimal.
 
     Returns
     -------
@@ -34,11 +45,13 @@ def sample_tasks(num_tasks: int, seed: int) -> Tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     w_g = np.empty((num_tasks, X_SIZE, Z_SIZE), dtype=np.float64)
     w_f = np.empty((num_tasks, Z_SIZE, Y_SIZE), dtype=np.float64)
+    g_alpha = g_concentration * np.ones(Z_SIZE)
+    f_alpha = f_concentration * np.ones(Y_SIZE)
     for d in range(num_tasks):
         for x in range(X_SIZE):
-            w_g[d, x] = rng.dirichlet(np.ones(Z_SIZE))
+            w_g[d, x] = rng.dirichlet(g_alpha)
         for z in range(Z_SIZE):
-            w_f[d, z] = rng.dirichlet(np.ones(Y_SIZE))
+            w_f[d, z] = rng.dirichlet(f_alpha)
     return w_g, w_f
 
 
@@ -52,10 +65,17 @@ def load_tasks(path: str) -> Tuple[np.ndarray, np.ndarray]:
     return data["w_g"], data["w_f"]
 
 
-def get_or_create_tasks(path: str, num_tasks: int, seed: int, regenerate: bool = False):
+def get_or_create_tasks(
+    path: str,
+    num_tasks: int,
+    seed: int,
+    regenerate: bool = False,
+    g_concentration: float = 1.0,
+    f_concentration: float = 1.0,
+):
     if os.path.exists(path) and not regenerate:
         return load_tasks(path)
-    w_g, w_f = sample_tasks(num_tasks, seed)
+    w_g, w_f = sample_tasks(num_tasks, seed, g_concentration, f_concentration)
     save_tasks(path, w_g, w_f)
     return w_g, w_f
 
@@ -130,7 +150,7 @@ class CompUrnsIterable(IterableDataset):
             yield {
                 "input_ids": torch.tensor(ids, dtype=torch.long),
                 "labels": torch.tensor(labels, dtype=torch.long),
-                "seq_type": SEQ_TYPE_TO_ID[tau],
+                "seq_type_id": SEQ_TYPE_TO_ID[tau],
             }
 
 
@@ -148,7 +168,7 @@ class CompUrnsEvalDataset(Dataset):
                 {
                     "input_ids": torch.tensor(ids, dtype=torch.long),
                     "labels": torch.tensor(labels, dtype=torch.long),
-                    "seq_type": SEQ_TYPE_TO_ID[seq_type],
+                    "seq_type_id": SEQ_TYPE_TO_ID[seq_type],
                     "task_idx": d,
                     "pairs": pairs,
                 }

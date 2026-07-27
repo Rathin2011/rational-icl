@@ -30,27 +30,31 @@ def _output_positions(num_pairs: int = NUM_PAIRS):
     return [2 * i + 1 for i in range(num_pairs)]
 
 
-def bayes_ce_g_only_batch(examples) -> float:
-    """Average CE of g-predictor vs true z tokens on g_only examples."""
+def bayes_ce_g_only_batch(examples, concentration: float = 1.0) -> float:
+    """Average CE of g-predictor vs true z tokens on g_only examples.
+
+    concentration must match data.sample_tasks's actual g-concentration for
+    this to remain the true Bayes floor rather than a misspecified one.
+    """
     toks = []
     dists = []
     for ex in examples:
         pairs = ex["pairs"]  # (x,z)
         # For each output position i, predictive uses prefix pairs[:i]
         for i, (x, z) in enumerate(pairs):
-            p = g_predictive(pairs[:i], query_x=x)
+            p = g_predictive(pairs[:i], query_x=x, concentration=concentration)
             toks.append(z)
             dists.append(p)
     return mean_ce_to_predictor(toks, dists)
 
 
-def bayes_ce_f_only_batch(examples) -> float:
+def bayes_ce_f_only_batch(examples, concentration: float = 1.0) -> float:
     toks = []
     dists = []
     for ex in examples:
         pairs = ex["pairs"]  # (z,y)
         for i, (z, y) in enumerate(pairs):
-            p = f_predictive(pairs[:i], query_z=z)
+            p = f_predictive(pairs[:i], query_z=z, concentration=concentration)
             toks.append(y)
             dists.append(p)
     return mean_ce_to_predictor(toks, dists)
@@ -106,10 +110,18 @@ def check_phase1_gate(
     }
 
 
-def evaluate_phase1_gate(model, g_eval, f_eval, device: str, tol: float = PHASE1_CE_TOL):
+def evaluate_phase1_gate(
+    model,
+    g_eval,
+    f_eval,
+    device: str,
+    tol: float = PHASE1_CE_TOL,
+    g_concentration: float = 1.0,
+    f_concentration: float = 1.0,
+):
     """Full gate evaluation on fixed CompUrnsEvalDataset objects."""
-    bayes_g = bayes_ce_g_only_batch(g_eval)
-    bayes_f = bayes_ce_f_only_batch(f_eval)
+    bayes_g = bayes_ce_g_only_batch(g_eval, concentration=g_concentration)
+    bayes_f = bayes_ce_f_only_batch(f_eval, concentration=f_concentration)
     model_g = model_ce_on_eval(model, g_eval, device)
     model_f = model_ce_on_eval(model, f_eval, device)
     return check_phase1_gate(model_g, bayes_g, model_f, bayes_f, tol=tol)
